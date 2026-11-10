@@ -74,7 +74,9 @@ class _Validator:
         if not self.enabled or value is None:
             return
         if len(value) < 14:
-            raise ValueError(f"accounthash failed length check, ensure using hashValue of account not accountNumber (client.linked_accounts())")
+            raise ValueError("accounthash failed length check, ensure using hashValue of account not accountNumber (client.linked_accounts())")
+        if not value.isalnum():
+            raise ValueError("accounthash must be alphanumeric, ensure using hashValue from client.linked_accounts()")
 
 
     def _vint(self, name, value, *, allow_none=True, lo=None, hi=None):

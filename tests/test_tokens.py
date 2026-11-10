@@ -155,3 +155,49 @@ def test_cross_instance_exclusive_lock():
             b._conn.close()
     finally:
         os.remove(path)
+
+
+# --------------------------- hardening checks ----------------------------- #
+VALID_KEY, VALID_SECRET = "k" * 32, "s" * 16
+
+
+def test_invalid_encryption_key_is_rejected_not_ignored(tmp_path):
+    # A bad key must never silently fall back to storing tokens in plaintext.
+    with pytest.raises(ValueError, match="encryption key is invalid"):
+        tokens_mod.Tokens(VALID_KEY, VALID_SECRET, "https://127.0.0.1",
+                          tokens_db=str(tmp_path / "t.db"), encryption="short")
+
+
+def test_callback_must_be_https_url(tmp_path):
+    with pytest.raises(ValueError, match="https"):
+        tokens_mod.Tokens(VALID_KEY, VALID_SECRET, "httpsx://127.0.0.1", tokens_db=str(tmp_path / "t.db"))
+
+
+@pytest.mark.skipif(os.name == "nt", reason="POSIX file permissions")
+def test_token_db_and_env_file_are_owner_only(tmp_path, monkeypatch):
+    import schwabdev.utils as utils_mod
+    monkeypatch.setattr(tokens_mod.Tokens, "update_tokens", lambda self, **k: False)  # no auth flow
+    db = tmp_path / "private" / "tokens.db"
+    t = tokens_mod.Tokens(VALID_KEY, VALID_SECRET, "https://127.0.0.1", tokens_db=str(db))
+    t._close()
+    assert os.stat(db).st_mode & 0o777 == 0o600
+    assert os.stat(db.parent).st_mode & 0o777 == 0o700
+
+    monkeypatch.setenv("HOME", str(tmp_path))
+    utils_mod.save_env_global(VALID_KEY, VALID_SECRET, "https://127.0.0.1")
+    assert os.stat(tmp_path / ".schwabdev" / "env.json").st_mode & 0o777 == 0o600
+
+
+def test_status_reports_no_token_values(tokens):
+    tokens._access_token_issued = tokens_mod._now()
+    status = tokens.status()
+    assert set(status) == {"access_token_seconds_left", "refresh_token_seconds_left", "encrypted"}
+    assert 1700 < status["access_token_seconds_left"] <= 1800 and status["encrypted"] is False
+
+
+def test_auth_code_is_not_logged(tokens, caplog):
+    import logging
+    tokens._logger = logging.getLogger("schwabdev-leak-test")
+    with caplog.at_level(logging.DEBUG, logger="schwabdev-leak-test"):
+        assert tokens._exchange_auth_code("https://127.0.0.1/?session=SECRETVALUE") is None
+    assert "SECRETVALUE" not in caplog.text
