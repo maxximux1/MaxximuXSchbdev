@@ -15,6 +15,8 @@ import urllib.parse
 import requests
 from cryptography.fernet import Fernet
 
+from .utils import _create_private_file, _make_private_dir, _restrict_permissions
+
 _ENC_PREFIX = "enc:"
 _UTC = datetime.timezone.utc
 _MIN = datetime.datetime.min.replace(tzinfo=_UTC)
@@ -45,9 +47,11 @@ class Tokens:
             call_for_auth (function | None): Function to call for custom auth flow.
             open_browser_for_auth (bool): Open a browser during the auth flow.
         """
+        env_path = os.path.expanduser("~/.schwabdev/env.json")
         try:
-            with open(os.path.expanduser("~/.schwabdev/env.json")) as f:
+            with open(env_path) as f:
                 env = json.load(f)
+            _restrict_permissions(env_path)  # holds the app secret: owner-only
         except OSError:
             env = {}
 
@@ -67,7 +71,7 @@ class Tokens:
         # Schwab key/secret lengths vary but are always even and combined >= 32 chars.
         if len(app_key) % 2 != 0 or len(app_secret) % 2 != 0 or len(app_key) + len(app_secret) < 32:
             raise ValueError("[Schwabdev] App key or app secret likely invalid.")
-        if not callback_url.startswith("https"):
+        if not callback_url.startswith("https://"):
             raise ValueError("[Schwabdev] callback_url must be https.")
         if callback_url.endswith("/"):
             raise ValueError("[Schwabdev] callback_url cannot be a path (ends with \"/\").")
@@ -93,13 +97,22 @@ class Tokens:
         self._refresh_token_issued = _MIN
         self._access_token_timeout = 30 * 60            # seconds (30 min from Schwab)
         self._refresh_token_timeout = 7 * 24 * 60 * 60  # seconds (7 days from Schwab)
-        self._cipher_suite = Fernet(encryption) if (encryption and len(encryption) > 16) else None
+        if encryption:
+            try:
+                self._cipher_suite = Fernet(encryption)
+            except Exception:
+                # Never fall back to plaintext when the caller asked for encryption.
+                raise ValueError("[Schwabdev] encryption key is invalid; generate one with "
+                                 "cryptography.fernet.Fernet.generate_key().decode()") from None
+        else:
+            self._cipher_suite = None
+            logger.warning("[Schwabdev] Tokens database is NOT encrypted; pass encryption=<Fernet key> "
+                           "to encrypt tokens at rest.")
 
         # init token database
         tokens_db = os.path.expanduser(tokens_db)
-        db_dir = os.path.dirname(tokens_db)
-        if db_dir:
-            os.makedirs(db_dir, exist_ok=True)
+        _make_private_dir(os.path.dirname(tokens_db))
+        _create_private_file(tokens_db)  # owner-only before any token is written
         self._conn = sqlite3.connect(tokens_db, check_same_thread=False)
         self._cur = self._conn.cursor()
 
@@ -144,6 +157,20 @@ class Tokens:
 
     def __del__(self):
         self._close()
+
+    def status(self) -> dict:
+        """
+        Token health, without exposing any token value.
+
+        Returns:
+            dict: seconds left on the access and refresh tokens, and whether tokens are encrypted at rest.
+        """
+        now = _now()
+        return {
+            "access_token_seconds_left": int(self._access_token_timeout - (now - self._access_token_issued).total_seconds()),
+            "refresh_token_seconds_left": int(self._refresh_token_timeout - (now - self._refresh_token_issued).total_seconds()),
+            "encrypted": self._cipher_suite is not None,
+        }
 
     # ---- encryption -------------------------------------------------------
 
@@ -346,8 +373,8 @@ class Tokens:
                     self._logger.info(f"Refresh token updated elsewhere at {self._refresh_token_issued}.")
                     return True
 
-                auth_url = (f"https://api.schwabapi.com/v1/oauth/authorize"
-                            f"?client_id={self._app_key}&redirect_uri={self._callback_url}")
+                auth_url = "https://api.schwabapi.com/v1/oauth/authorize?" + urllib.parse.urlencode(
+                    {"client_id": self._app_key, "redirect_uri": self._callback_url})
                 now = _now()
                 auth_callback = self._prompt_for_auth(auth_url)
                 if not auth_callback:
@@ -391,7 +418,7 @@ class Tokens:
         else:
             code = urllib.parse.unquote(url_or_code)
         if not code:
-            self._logger.error(f"Could not parse authorization code from URL. ({url_or_code})")
+            self._logger.error("Could not parse authorization code from the pasted URL.")
             return None
 
         response = self._post_oauth_token("authorization_code", code)

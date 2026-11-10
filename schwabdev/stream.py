@@ -77,8 +77,13 @@ class StreamBase:
 
             start_time = datetime.datetime.now(datetime.timezone.utc)
             try:
+                socket_url = (self._streamer_info or {}).get('streamerSocketUrl')
+                if not isinstance(socket_url, str) or not socket_url.startswith("wss://"):
+                    # the access token is sent on this socket: never send it unencrypted
+                    self._logger.error("Streamer socket URL is missing or not secure (wss://); not connecting.")
+                    return
                 self._logger.debug("Connecting to streaming server...")
-                async with websockets.connect(self._streamer_info.get('streamerSocketUrl'), ping_timeout=ping_timeout) as self._websocket:
+                async with websockets.connect(socket_url, ping_timeout=ping_timeout) as self._websocket:
                     self._logger.debug("Connected to streaming server.")
                     login_payload = self.basic_request(service="ADMIN",
                                                        command="LOGIN",
@@ -104,9 +109,6 @@ class StreamBase:
                             await self._websocket.send(json.dumps({"requests": reqs}))
                             await call_receiver(await self._websocket.recv())  # receive subscription response
 
-                    # reset backoff time
-                    self._backoff_time = 2.0
-
                     # main listener loop
                     while self.active and not self._should_stop:
                         await call_receiver(await self._websocket.recv())
@@ -118,25 +120,31 @@ class StreamBase:
                 elif self._should_stop:
                     self._logger.info(f"Stream connection closed during shutdown. ({e})")
                     break
-                else:  # abnormal closure
-                    elapsed = (datetime.datetime.now(datetime.timezone.utc) - start_time).total_seconds()
+                else:  # abnormal closure (lost connection, invalid login, no subscriptions, ...)
+                    elapsed = self._settle_backoff(start_time)
                     self._logger.warning(f"Stream connection closed unexpectedly ({e}). Elapsed: {elapsed:.0f}s. Reconnecting in {self._backoff_time}s...")
                     await self._wait_for_backoff()
-            except websockets.exceptions.ConnectionClosedError as e:  # lost internet connection
-                elapsed = (datetime.datetime.now(datetime.timezone.utc) - start_time).total_seconds()
-                if elapsed <= 90:
-                    self._logger.warning(f"Stream has crashed within 90 seconds, likely no subscriptions, invalid login, or lost connection. Not restarting. {e}")
-                    break
-                else:
-                    self._logger.error(f"Stream connection closed error. Reconnecting in {self._backoff_time} seconds...")
-                    await self._wait_for_backoff()
             except Exception as e:  # stream has quit unexpectedly, try to reconnect
+                self._settle_backoff(start_time)
                 self._logger.error(e)
                 self._logger.warning(f"Stream unknown exception. Reconnecting in {self._backoff_time} seconds...")
                 await self._wait_for_backoff()
             finally:
                 self.active = False
                 self._websocket = None
+
+    def _settle_backoff(self, start_time: datetime.datetime) -> float:
+        """
+        Reset the backoff only after a connection that stayed up (>90s); connections that
+        fail quickly keep backing off (up to 120s) instead of hammering the server.
+
+        Returns:
+            float: seconds the connection was up
+        """
+        elapsed = (datetime.datetime.now(datetime.timezone.utc) - start_time).total_seconds()
+        if elapsed > 90:
+            self._backoff_time = 2.0
+        return elapsed
 
     async def _wait_for_backoff(self):
         """
@@ -465,9 +473,10 @@ class Stream(StreamBase):
         Args:
             receiver (function, optional): function to call when data is received. Defaults to print.
             daemon (bool, optional): whether to run the thread in the background (as a daemon). Defaults to True.
-            ping_interval (int, optional): interval in seconds to send pings to the streamer. Defaults to 20.
+            ping_interval (int, optional): seconds to wait for a pong from the streamer before the
+                connection is considered lost (kept as "ping_interval" for backwards compatibility). Defaults to 20.
         """
-        if self.active and (self._thread and self._thread.is_alive()):
+        if self._thread and self._thread.is_alive():  # running or still connecting
             self._logger.warning("Stream already active.")
             return
 
@@ -489,7 +498,10 @@ class Stream(StreamBase):
         self.stop()
 
     def __del__(self):
-        self.stop()
+        try:
+            self.stop()
+        except Exception:
+            pass
 
     def start_auto(self, receiver=print, start_time: datetime.time = datetime.time(9, 29, 0),
                    stop_time: datetime.time = datetime.time(16, 0, 0), on_days: list[int] | tuple[int] = (0,1,2,3,4),
@@ -615,6 +627,11 @@ class StreamAsync(StreamBase):
     async def start(self, receiver=print, ping_interval: int = 20, **kwargs):
         """
         Start the stream in the *current* event loop (no thread).
+
+        Args:
+            receiver (function, optional): function to call when data is received. Defaults to print.
+            ping_interval (int, optional): seconds to wait for a pong from the streamer before the
+                connection is considered lost (kept as "ping_interval" for backwards compatibility). Defaults to 20.
         """
         if self.active or (self._task and not self._task.done()):
             self._logger.warning("Stream already active.")

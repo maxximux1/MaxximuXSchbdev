@@ -1,0 +1,69 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<meta name="referrer" content="no-referrer">
+<title>Schwab Dashboard</title>
+<link rel="stylesheet" href="/style.css">
+</head>
+<body>
+<header class="top">
+  <div>
+    <h1>Schwab dashboard <span id="mode" class="badge" hidden></span></h1>
+    <p id="updated" class="muted">Loading…</p>
+  </div>
+  <button id="refresh" type="button">Refresh</button>
+</header>
+
+<main>
+  <div id="notices" role="status" aria-live="polite"></div>
+
+  <section aria-label="Connection">
+    <div id="status" class="status"></div>
+  </section>
+
+  <section aria-label="Summary">
+    <div id="tiles" class="tiles"></div>
+  </section>
+
+  <section>
+    <h2>Positions</h2>
+    <div id="accounts"></div>
+  </section>
+
+  <section>
+    <div class="section-head">
+      <h2>Watchlist</h2>
+      <div class="watch-edit">
+        <label for="symbols" class="muted">Symbols</label>
+        <input id="symbols" type="text" autocomplete="off" spellcheck="false" maxlength="300" placeholder="SPY, AAPL">
+        <button id="save-symbols" type="button">Update</button>
+      </div>
+    </div>
+    <div id="quotes"></div>
+  </section>
+
+  <section>
+    <h2 id="orders-title">Recent orders</h2>
+    <div id="orders"></div>
+  </section>
+
+  <section>
+    <h2>Market hours today</h2>
+    <div id="markets" class="markets"></div>
+  </section>
+
+  <section>
+    <h2>Activity</h2>
+    <p class="muted">Every request this dashboard has sent to Schwab, newest first. It only ever reads data.</p>
+    <div id="activity"></div>
+  </section>
+</main>
+
+<footer class="muted">
+  Read-only · runs only on this computer · account numbers are masked · refreshes every 30 seconds
+</footer>
+<script src="/app.js"></script>
+</body>
+</html>

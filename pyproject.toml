@@ -7,7 +7,7 @@ name = "schwabdev"
 version = "4.0.0"
 description = "An easy and lightweight wrapper for using the Charles Schwab API."
 readme = { file = "README.md", content-type = "text/markdown" }
-authors = [{name = "Tyler Bowers"}, {email = "tylerebowers@gmail.com"}]
+authors = [{name = "Tyler Bowers", email = "tylerebowers@gmail.com"}]
 requires-python = ">=3.11"
 license = "MIT"
 dependencies = [
@@ -46,9 +46,13 @@ Source = "https://github.com/tylerebowers/Schwabdev"
 Youtube = "https://www.youtube.com/playlist?list=PLs4JLWxBQIxpbvCj__DjAc0RRTlBz-TR8"
 PyPI = "https://pypi.org/project/schwabdev/"
 
+[tool.setuptools]
+packages = ["schwabdev"]
+
 [tool.pytest.ini_options]
 asyncio_mode = "auto"
-testpaths = "tests/"
+asyncio_default_fixture_loop_scope = "function"
+testpaths = ["tests"]
 
 [project.optional-dependencies]
 context = [

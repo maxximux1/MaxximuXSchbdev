@@ -63,6 +63,14 @@ class ClientBase:
             return ",".join(map(str, value))
         return value
 
+    @staticmethod
+    def _seg(value) -> str:
+        """Percent-encode a value used as a single URL path segment (blocks '/', '..', '?', '#' injection)."""
+        seg = urllib.parse.quote(str(value), safe="$")
+        if seg in ("", ".", ".."):
+            raise ValueError("Invalid (empty or relative) value used in a request path.")
+        return seg
+
     def _time_convert(self, dt=None, format: "str | TimeFormat" = TimeFormat.ISO_8601):
         """
         Convert a datetime/date to the requested format; pass through str/None unchanged.
@@ -147,7 +155,9 @@ class Client(ClientBase):
             backoff_factor=0.5,
             backoff_max=120,
             status_forcelist=(429, 500, 502, 503, 504),
-            allowed_methods=["GET", "PUT", "DELETE"], # no retries for POST (method not idempotent)
+            # Only retry requests that are safe to repeat. POST (place order) and PUT (replace
+            # order: cancels then re-creates) are never retried, so an order cannot be acted on twice.
+            allowed_methods=["GET", "DELETE"],
             raise_on_status=False,
         )
         self._session.mount("https://", HTTPAdapter(max_retries=retry))
@@ -229,7 +239,7 @@ class Client(ClientBase):
             requests.Response: details for one linked account.
         """
         self._validator._v_account_details(accountHash, fields)
-        return self._request("GET", f"/trader/v1/accounts/{accountHash}",
+        return self._request("GET", f"/trader/v1/accounts/{self._seg(accountHash)}",
                              params=self._parse_params({"fields": fields}))
 
     def account_orders(self, accountHash: str, fromEnteredTime: datetime.datetime | str,
@@ -249,7 +259,7 @@ class Client(ClientBase):
             requests.Response: orders for one linked account.
         """
         self._validator._v_account_orders(accountHash, fromEnteredTime, toEnteredTime, maxResults, status)
-        return self._request("GET", f"/trader/v1/accounts/{accountHash}/orders",
+        return self._request("GET", f"/trader/v1/accounts/{self._seg(accountHash)}/orders",
                              params=self._parse_params({
                                  "fromEnteredTime": self._time_convert(fromEnteredTime, TimeFormat.ISO_8601),
                                  "toEnteredTime": self._time_convert(toEnteredTime, TimeFormat.ISO_8601),
@@ -268,7 +278,7 @@ class Client(ClientBase):
             requests.Response: order number in response header (absent if immediately filled).
         """
         self._validator._v_order(accountHash, order)
-        return self._request("POST", f"/trader/v1/accounts/{accountHash}/orders",
+        return self._request("POST", f"/trader/v1/accounts/{self._seg(accountHash)}/orders",
                              headers={"Accept": "application/json", "Content-Type": "application/json"},
                              json=order)
 
@@ -284,7 +294,7 @@ class Client(ClientBase):
             requests.Response: order details.
         """
         self._validator._v_order_id(accountHash, orderId)
-        return self._request("GET", f"/trader/v1/accounts/{accountHash}/orders/{orderId}")
+        return self._request("GET", f"/trader/v1/accounts/{self._seg(accountHash)}/orders/{self._seg(orderId)}")
 
     def cancel_order(self, accountHash: str, orderId: int | str) -> requests.Response:
         """
@@ -298,7 +308,7 @@ class Client(ClientBase):
             requests.Response: response code.
         """
         self._validator._v_order_id(accountHash, orderId)
-        return self._request("DELETE", f"/trader/v1/accounts/{accountHash}/orders/{orderId}")
+        return self._request("DELETE", f"/trader/v1/accounts/{self._seg(accountHash)}/orders/{self._seg(orderId)}")
 
     def replace_order(self, accountHash: str, orderId: int | str, order: dict) -> requests.Response:
         """
@@ -313,7 +323,7 @@ class Client(ClientBase):
             requests.Response: response code.
         """
         self._validator._v_replace_order(accountHash, orderId, order)
-        return self._request("PUT", f"/trader/v1/accounts/{accountHash}/orders/{orderId}",
+        return self._request("PUT", f"/trader/v1/accounts/{self._seg(accountHash)}/orders/{self._seg(orderId)}",
                              headers={"Accept": "application/json", "Content-Type": "application/json"},
                              json=order)
 
@@ -350,7 +360,7 @@ class Client(ClientBase):
             orderObject (dict): order dictionary.
         """
         self._validator._v_order(accountHash, orderObject)
-        return self._request("POST", f"/trader/v1/accounts/{accountHash}/previewOrder",
+        return self._request("POST", f"/trader/v1/accounts/{self._seg(accountHash)}/previewOrder",
                              headers={"Content-Type": "application/json"}, json=orderObject)
 
     def transactions(self, accountHash: str, startDate: datetime.datetime | str,
@@ -369,7 +379,7 @@ class Client(ClientBase):
             requests.Response: list of transactions for a specific account.
         """
         self._validator._v_transactions(accountHash, startDate, endDate, types, symbol)
-        return self._request("GET", f"/trader/v1/accounts/{accountHash}/transactions",
+        return self._request("GET", f"/trader/v1/accounts/{self._seg(accountHash)}/transactions",
                              params=self._parse_params({
                                  "startDate": self._time_convert(startDate, TimeFormat.ISO_8601),
                                  "endDate": self._time_convert(endDate, TimeFormat.ISO_8601),
@@ -388,7 +398,7 @@ class Client(ClientBase):
             requests.Response: transaction details.
         """
         self._validator._v_transaction_details(accountHash, transactionId)
-        return self._request("GET", f"/trader/v1/accounts/{accountHash}/transactions/{transactionId}")
+        return self._request("GET", f"/trader/v1/accounts/{self._seg(accountHash)}/transactions/{self._seg(transactionId)}")
 
     def preferences(self) -> requests.Response:
         """
@@ -561,7 +571,7 @@ class Client(ClientBase):
             requests.Response: movers.
         """
         self._validator._v_movers(symbol, sort, frequency)
-        return self._request("GET", f"/marketdata/v1/movers/{symbol}",
+        return self._request("GET", f"/marketdata/v1/movers/{self._seg(symbol)}",
                              headers={"accept": "application/json"},
                              params=self._parse_params({"sort": sort, "frequency": frequency}))
 
@@ -594,7 +604,7 @@ class Client(ClientBase):
             requests.Response: market hours.
         """
         self._validator._v_market_hour(market_id, date)
-        return self._request("GET", f"/marketdata/v1/markets/{market_id}",
+        return self._request("GET", f"/marketdata/v1/markets/{self._seg(market_id)}",
                              params=self._parse_params({"date": self._time_convert(date, TimeFormat.YYYY_MM_DD)}))
 
     def instruments(self, symbols: str, projection: str) -> requests.Response:
@@ -624,7 +634,7 @@ class Client(ClientBase):
             requests.Response: instrument.
         """
         self._validator._v_cusip(cusip_id)
-        return self._request("GET", f"/marketdata/v1/instruments/{cusip_id}")
+        return self._request("GET", f"/marketdata/v1/instruments/{self._seg(cusip_id)}")
 
 
 class ClientAsync(ClientBase):
@@ -683,6 +693,7 @@ class ClientAsync(ClientBase):
 
     async def _request(self, method: str, path: str, *, parsed: bool | None = None, **kwargs):
         """Issue a request on the shared aiohttp session and optionally parse the body."""
+        self.update_tokens()  # refresh on demand, so tokens stay valid without `async with`
         response = await self._session.request(method, path, **kwargs)
         return await self._parse_response(response, parsed)
 
@@ -727,7 +738,7 @@ class ClientAsync(ClientBase):
             fields (str | None): fields to return.
         """
         self._validator._v_account_details(accountHash, fields)
-        return await self._request("GET", f"/trader/v1/accounts/{accountHash}",
+        return await self._request("GET", f"/trader/v1/accounts/{self._seg(accountHash)}",
                                    params=self._parse_params({"fields": fields}), parsed=parsed)
 
     async def account_orders(self, accountHash: str, fromEnteredTime: datetime.datetime | str,
@@ -744,7 +755,7 @@ class ClientAsync(ClientBase):
             status (str | None): status of order.
         """
         self._validator._v_account_orders(accountHash, fromEnteredTime, toEnteredTime, maxResults, status)
-        return await self._request("GET", f"/trader/v1/accounts/{accountHash}/orders",
+        return await self._request("GET", f"/trader/v1/accounts/{self._seg(accountHash)}/orders",
                                    headers={"Accept": "application/json"},
                                    params=self._parse_params({
                                        "maxResults": maxResults,
@@ -764,7 +775,7 @@ class ClientAsync(ClientBase):
             Raw response (order number is in the response header).
         """
         self._validator._v_order(accountHash, order)
-        return await self._request("POST", f"/trader/v1/accounts/{accountHash}/orders",
+        return await self._request("POST", f"/trader/v1/accounts/{self._seg(accountHash)}/orders",
                                    headers={"Accept": "application/json", "Content-Type": "application/json"},
                                    json=order, parsed=False)  # must be raw to read headers
 
@@ -777,7 +788,7 @@ class ClientAsync(ClientBase):
             orderId (int | str): order id.
         """
         self._validator._v_order_id(accountHash, orderId)
-        return await self._request("GET", f"/trader/v1/accounts/{accountHash}/orders/{orderId}", parsed=parsed)
+        return await self._request("GET", f"/trader/v1/accounts/{self._seg(accountHash)}/orders/{self._seg(orderId)}", parsed=parsed)
 
     async def cancel_order(self, accountHash: str, orderId: int | str, parsed: bool | None = None):
         """
@@ -788,7 +799,7 @@ class ClientAsync(ClientBase):
             orderId (int | str): order id.
         """
         self._validator._v_order_id(accountHash, orderId)
-        return await self._request("DELETE", f"/trader/v1/accounts/{accountHash}/orders/{orderId}", parsed=parsed)
+        return await self._request("DELETE", f"/trader/v1/accounts/{self._seg(accountHash)}/orders/{self._seg(orderId)}", parsed=parsed)
 
     async def replace_order(self, accountHash: str, orderId: int | str, order: dict):
         """
@@ -803,7 +814,7 @@ class ClientAsync(ClientBase):
             Raw response (order number is in the response header).
         """
         self._validator._v_replace_order(accountHash, orderId, order)
-        return await self._request("PUT", f"/trader/v1/accounts/{accountHash}/orders/{orderId}",
+        return await self._request("PUT", f"/trader/v1/accounts/{self._seg(accountHash)}/orders/{self._seg(orderId)}",
                                    headers={"Accept": "application/json", "Content-Type": "application/json"},
                                    json=order, parsed=False)  # must be raw to read headers
 
@@ -831,7 +842,7 @@ class ClientAsync(ClientBase):
     async def preview_order(self, accountHash: str, order: dict, parsed: bool | None = None):
         """Preview an order for a specific account."""
         self._validator._v_order(accountHash, order)
-        return await self._request("POST", f"/trader/v1/accounts/{accountHash}/previewOrder",
+        return await self._request("POST", f"/trader/v1/accounts/{self._seg(accountHash)}/previewOrder",
                                    headers={"Content-Type": "application/json"}, json=order, parsed=parsed)
 
     async def transactions(self, accountHash: str, startDate: datetime.datetime | str,
@@ -848,7 +859,7 @@ class ClientAsync(ClientBase):
             symbol (str | None): symbol.
         """
         self._validator._v_transactions(accountHash, startDate, endDate, types, symbol)
-        return await self._request("GET", f"/trader/v1/accounts/{accountHash}/transactions",
+        return await self._request("GET", f"/trader/v1/accounts/{self._seg(accountHash)}/transactions",
                                    params=self._parse_params({
                                        "startDate": self._time_convert(startDate, TimeFormat.ISO_8601),
                                        "endDate": self._time_convert(endDate, TimeFormat.ISO_8601),
@@ -864,7 +875,7 @@ class ClientAsync(ClientBase):
             transactionId (str | int): transaction id.
         """
         self._validator._v_transaction_details(accountHash, transactionId)
-        return await self._request("GET", f"/trader/v1/accounts/{accountHash}/transactions/{transactionId}", parsed=parsed)
+        return await self._request("GET", f"/trader/v1/accounts/{self._seg(accountHash)}/transactions/{self._seg(transactionId)}", parsed=parsed)
 
     async def preferences(self, parsed: bool | None = None):
         """
@@ -997,7 +1008,7 @@ class ClientAsync(ClientBase):
             Must be called within market hours.
         """
         self._validator._v_movers(symbol, sort, frequency)
-        return await self._request("GET", f"/marketdata/v1/movers/{symbol}",
+        return await self._request("GET", f"/marketdata/v1/movers/{self._seg(symbol)}",
                                    headers={"accept": "application/json"},
                                    params=self._parse_params({"sort": sort, "frequency": frequency}), parsed=parsed)
 
@@ -1026,7 +1037,7 @@ class ClientAsync(ClientBase):
             date (datetime | str): date.
         """
         self._validator._v_market_hour(market_id, date)
-        return await self._request("GET", f"/marketdata/v1/markets/{market_id}",
+        return await self._request("GET", f"/marketdata/v1/markets/{self._seg(market_id)}",
                                    params=self._parse_params({"date": self._time_convert(date, TimeFormat.YYYY_MM_DD)}),
                                    parsed=parsed)
 
@@ -1051,4 +1062,4 @@ class ClientAsync(ClientBase):
             cusip_id (str | int): cusip id.
         """
         self._validator._v_cusip(cusip_id)
-        return await self._request("GET", f"/marketdata/v1/instruments/{cusip_id}", parsed=parsed)
+        return await self._request("GET", f"/marketdata/v1/instruments/{self._seg(cusip_id)}", parsed=parsed)

@@ -106,3 +106,25 @@ class TestParseParams:
         src = {"a": 1, "b": None}
         out = base._parse_params(src)
         assert out is not src
+
+
+# ------------------------- path-segment hardening -------------------------- #
+def test_path_segments_cannot_escape(sync_client):
+    client, calls = sync_client
+    client._validator.enabled = False  # even with validation off, the path must stay intact
+    client.order_details("ABC123DEF456GHI789JKL012", "1/../../oauth?x=1#y")
+    assert calls[-1]["path"] == "/trader/v1/accounts/ABC123DEF456GHI789JKL012/orders/1%2F..%2F..%2Foauth%3Fx%3D1%23y"
+    with pytest.raises(ValueError):
+        client.account_details("..")
+
+
+def test_account_hash_must_be_alphanumeric(sync_client):
+    client, _ = sync_client
+    with pytest.raises(ValueError, match="alphanumeric"):
+        client.account_details("ABC123DEF456/../../x")
+
+
+def test_star_import_works_without_optional_submodule():
+    namespace = {}
+    exec("from schwabdev import *", namespace)
+    assert "Client" in namespace
